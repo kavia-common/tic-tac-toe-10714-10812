@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSound } from '../hooks/useSound';
+import { calculateWinner, isBoardFull, nextPlayer } from '../logic/gameUtils';
 
 // PUBLIC_INTERFACE
 export const GameContext = createContext({
@@ -30,29 +31,28 @@ export const GameContext = createContext({
 });
 
 /**
- * Helper to safely parse backend response JSON and normalize fields.
- * Expected backend /game, /move, /reset shape:
- * {
- *   board: string[] (length 9 with "X"|"O"|null),
- *   current_player: "X"|"O",
- *   status: "playing"|"won"|"draw",
- *   winning_line: number[],
- *   message?: string
- * }
+ * Reconstruct board and status from a list of moves [{index, player}]
  */
-function normalizeGameState(json) {
-  return {
-    board: Array.isArray(json.board) ? json.board : Array(9).fill(null),
-    currentPlayer: json.current_player ?? 'X',
-    status: json.status ?? 'playing',
-    winningLine: Array.isArray(json.winning_line) ? json.winning_line : [],
-    message: json.message || '',
-  };
+function buildStateFromMoves(moves) {
+  const board = Array(9).fill(null);
+  let current = 'X';
+  for (const m of moves || []) {
+    if (m && typeof m.index === 'number' && (m.player === 'X' || m.player === 'O') && m.index >= 0 && m.index < 9 && !board[m.index]) {
+      board[m.index] = m.player;
+      current = nextPlayer(m.player);
+    }
+  }
+  const { winner, line } = calculateWinner(board);
+  let status = 'playing';
+  if (winner) status = 'won';
+  else if (isBoardFull(board)) status = 'draw';
+  const currentPlayer = status === 'playing' ? current : nextPlayer(current); // after a win/draw, next turn label isn't used
+  return { board, currentPlayer, status, winningLine: line };
 }
 
 // PUBLIC_INTERFACE
 export function GameProvider({ children }) {
-  /** Central, accessible game state manager backed by FastAPI service */
+  /** Central, accessible game state manager backed by backend moves API */
   const [board, setBoard] = useState(Array(9).fill(null));
   const [currentPlayer, setCurrentPlayer] = useState('X');
   const [status, setStatus] = useState('playing'); // 'playing' | 'won' | 'draw'
@@ -63,8 +63,9 @@ export function GameProvider({ children }) {
   const [loading, setLoading] = useState(false);
   const announceTimeout = useRef(null);
 
-  // Backend base URL
-  const API_BASE = 'http://localhost:8000';
+  // Backend config via env
+  const API_BASE = (process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000').replace(/\/+$/, '');
+  const GAME_ID = (process.env.REACT_APP_GAME_ID || 'default').toString();
 
   // Sounds
   const { playPlace, playWin, playDraw, playReset, playInvalid } = useSound(soundEnabled);
@@ -82,7 +83,8 @@ export function GameProvider({ children }) {
     setCurrentPlayer(state.currentPlayer);
     setStatus(state.status);
     setWinningLine(state.winningLine);
-    setMessage(state.message || '');
+    // do not overwrite message unless explicitly provided
+    if (state.message) setMessage(state.message);
 
     if (!playSounds) return;
     if (state.status === 'won') {
@@ -101,16 +103,22 @@ export function GameProvider({ children }) {
     }
   }, [announce, playDraw, playPlace, playWin]);
 
+  /**
+   * Fetch all moves and rebuild local game state
+   */
   // PUBLIC_INTERFACE
   const fetchGame = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/game`, { headers: { 'Accept': 'application/json' } });
-      if (!res.ok) throw new Error(`Failed to load game (${res.status})`);
+      const res = await fetch(`${API_BASE}/games/${encodeURIComponent(GAME_ID)}/moves`, {
+        headers: { 'Accept': 'application/json' },
+      });
+      if (!res.ok) throw new Error(`Failed to load moves (${res.status})`);
       const json = await res.json();
-      const normalized = normalizeGameState(json);
-      applyState(normalized, { playSounds: false });
-      announce(`Game loaded. Player ${normalized.currentPlayer} begins.`);
+      const moves = Array.isArray(json?.moves) ? json.moves : json; // support {moves: []} or [] shapes
+      const state = buildStateFromMoves(moves);
+      applyState(state, { playSounds: false });
+      announce(`Game loaded. Player ${state.currentPlayer} begins.`);
     } catch (e) {
       const errMsg = `Error loading game: ${e.message}`;
       setMessage(errMsg);
@@ -118,20 +126,23 @@ export function GameProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, [API_BASE, announce, applyState]);
+  }, [API_BASE, GAME_ID, announce, applyState]);
 
   // Initial load
   useEffect(() => {
     fetchGame();
   }, [fetchGame]);
 
+  /**
+   * Post a move; if game_id is new, backend should initialize empty list.
+   * Body: { index, player }
+   */
   // PUBLIC_INTERFACE
   const makeMove = useCallback(async (index) => {
     if (status !== 'playing' || index < 0 || index > 8) {
       playInvalid();
       return;
     }
-    // Do not allow clicking filled cells (UI should already prevent)
     if (board[index]) {
       announce('Invalid move. Cell is already occupied.');
       playInvalid();
@@ -139,10 +150,10 @@ export function GameProvider({ children }) {
     }
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/move`, {
+      const res = await fetch(`${API_BASE}/games/${encodeURIComponent(GAME_ID)}/moves`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ index }),
+        body: JSON.stringify({ index, player: currentPlayer }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -152,8 +163,10 @@ export function GameProvider({ children }) {
         playInvalid();
         return;
       }
-      const normalized = normalizeGameState(json);
-      applyState(normalized, { playSounds: true, wasMove: true });
+      // After successful POST, re-fetch moves to guarantee sync with backend
+      await fetchGame();
+      // Sounds and announcements handled in applyState(fetch) but ensure place sound for immediate feedback
+      playPlace();
     } catch (e) {
       const errMsg = `Network error while making move: ${e.message}`;
       setMessage(errMsg);
@@ -162,20 +175,27 @@ export function GameProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, [API_BASE, announce, applyState, board, playInvalid, status]);
+  }, [API_BASE, GAME_ID, announce, board, currentPlayer, fetchGame, playInvalid, playPlace, status]);
 
+  /**
+   * Reset: client-side clears board but also expects backend to clear moves list.
+   * If backend lacks a reset endpoint, we can simulate by posting a special command;
+   * here we assume backend supports DELETE to clear moves, else fallback to local reset only.
+   */
   // PUBLIC_INTERFACE
   const resetGame = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/reset`, {
-        method: 'POST',
+      // Try DELETE /games/{id}/moves to clear history
+      const res = await fetch(`${API_BASE}/games/${encodeURIComponent(GAME_ID)}/moves`, {
+        method: 'DELETE',
         headers: { 'Accept': 'application/json' },
       });
-      if (!res.ok) throw new Error(`Reset failed (${res.status})`);
-      const json = await res.json();
-      const normalized = normalizeGameState(json);
-      applyState(normalized, { playSounds: false });
+      if (!res.ok) {
+        // If DELETE isn't supported, we fallback: show message and still refetch
+        setMessage('Reset not supported by backend; attempting to reload moves.');
+      }
+      await fetchGame();
       playReset();
       announce('Board reset. Player X begins.');
     } catch (e) {
@@ -185,11 +205,10 @@ export function GameProvider({ children }) {
     } finally {
       setLoading(false);
     }
-  }, [API_BASE, announce, applyState, playReset]);
+  }, [API_BASE, GAME_ID, announce, fetchGame, playReset]);
 
   // PUBLIC_INTERFACE
   const newGame = useCallback(async () => {
-    // Alias to reset backend game
     await resetGame();
   }, [resetGame]);
 

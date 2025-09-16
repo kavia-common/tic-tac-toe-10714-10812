@@ -2,14 +2,28 @@
 
 A responsive, accessible, and extensible Tic Tac Toe game built with React. Local two-player mode, strict turn order, immediate feedback, animations, sound with toggle, winning highlight, draw detection, and reset/new game.
 
+Now integrates with a backend API for move storage and board reconstruction.
+
 ## Quick Start
 
+- Copy .env.example to .env and set REACT_APP_BACKEND_URL (and optionally REACT_APP_GAME_ID)
 - npm install
 - npm start
 - npm test
 - npm run build
 
 Open http://localhost:3000
+
+## Backend Integration
+
+- Reads existing moves from GET {REACT_APP_BACKEND_URL}/games/{game_id}/moves on page load/reset
+- Posts new moves to POST {REACT_APP_BACKEND_URL}/games/{game_id}/moves with JSON { index: number, player: "X"|"O" }
+- If the game_id does not exist, the backend should initialize an empty list when the first move is posted
+- Configure:
+  - REACT_APP_BACKEND_URL (no trailing slash), e.g., http://localhost:8000
+  - REACT_APP_GAME_ID (optional, default "default")
+
+UI shows a loading badge during API calls and displays errors in the StatusBar.
 
 ## Features
 
@@ -37,7 +51,7 @@ src/
   - controls/
     - Controls.jsx
 - context/
-  - GameContext.js: Centralized state and game actions
+  - GameContext.js: Centralized state and game actions; syncs with backend via fetch
 - logic/
   - gameUtils.js: Pure logic for winner detection, draws, next player
   - gameUtils.test.js
@@ -66,11 +80,11 @@ src/
 ## Extensibility
 
 - Add AI by introducing a strategy into GameContext after each X/O move
-- Add online play by abstracting makeMove to sync with a backend
+- Online play backed by the current REST endpoints
 - The modular structure keeps UI and logic separated
 
 ## Security and Safety
 
 - Prevents invalid moves and blocks moves after game over
 - Sanitized, no user-generated content
-- No external services or persistent storage by default
+- Network errors are handled gracefully with user feedback
