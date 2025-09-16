@@ -4,7 +4,7 @@ import { GameContext } from '../../context/GameContext';
 // PUBLIC_INTERFACE
 export default function Cell({ index, value, isWinning }) {
   /** Single board cell with keyboard and pointer interactions */
-  const { makeMove, status, currentPlayer } = useContext(GameContext);
+  const { makeMove, status, currentPlayer, loading } = useContext(GameContext);
   const btnRef = useRef(null);
 
   const handleActivate = () => {
@@ -38,14 +38,16 @@ export default function Cell({ index, value, isWinning }) {
     ? `Cell ${index + 1}, ${value}`
     : `Cell ${index + 1}, empty. Press Enter or Space to place ${currentPlayer}`;
 
+  const isDisabled = status !== 'playing' || !!value || loading;
+
   return (
     <button
       ref={btnRef}
       className={`cell ${value ? 'filled' : ''} ${isWinning ? 'win' : ''}`}
       role="gridcell"
       aria-label={ariaLabel}
-      aria-disabled={status !== 'playing' || !!value}
-      disabled={status !== 'playing' || !!value}
+      aria-disabled={isDisabled}
+      disabled={isDisabled}
       onClick={handleActivate}
       onKeyDown={handleKeyDown}
       data-testid={`cell-${index}`}

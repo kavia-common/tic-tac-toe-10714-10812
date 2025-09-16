@@ -4,7 +4,7 @@ import { GameContext } from '../../context/GameContext';
 // PUBLIC_INTERFACE
 export default function Controls() {
   /** Control bar with Reset, New Game and Sound toggle */
-  const { resetGame, newGame, soundEnabled, toggleSound, status } = useContext(GameContext);
+  const { resetGame, newGame, soundEnabled, toggleSound, status, loading } = useContext(GameContext);
 
   return (
     <div className="controls" aria-label="Game controls">
@@ -14,6 +14,7 @@ export default function Controls() {
         onClick={newGame}
         data-testid="btn-newgame"
         aria-label="Start new game"
+        disabled={loading}
       >
         New Game
       </button>
@@ -23,6 +24,7 @@ export default function Controls() {
         onClick={resetGame}
         data-testid="btn-reset"
         aria-label="Reset current game"
+        disabled={loading}
       >
         Reset
       </button>
@@ -37,7 +39,7 @@ export default function Controls() {
       >
         {soundEnabled ? '🔊 Sound On' : '🔇 Sound Off'}
       </button>
-      <span className={`badge ${status}`} aria-hidden="true">{status}</span>
+      <span className={`badge ${status}`} aria-hidden="true">{loading ? 'loading…' : status}</span>
     </div>
   );
 }
